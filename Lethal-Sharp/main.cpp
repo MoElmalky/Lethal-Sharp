@@ -10,6 +10,12 @@ extern "C" {
 #include <portaudio.h>
 #include <GLFW/glfw3.h>
 #include <iostream>
+#include <chrono>
+#include <thread>
+
+double get_system_time_seconds() {
+    return std::chrono:: duration<double>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+}
 
 void initializeGLFW(int width, int height) {
     if (!glfwInit()) {
@@ -39,7 +45,7 @@ typedef struct {
     unsigned long remainingSamples;
 } AudioData;
 
-static int patestCallback(const void* inputBuffer, void* outputBuffer,
+static int audioplayCallback(const void* inputBuffer, void* outputBuffer,
     unsigned long framesPerBuffer,
     const PaStreamCallbackTimeInfo* timeInfo,
     PaStreamCallbackFlags statusFlags,
@@ -75,7 +81,7 @@ static int patestCallback(const void* inputBuffer, void* outputBuffer,
 
 int main() {
 
-    const char* filePath = "F:\\FFOutput\\Malky - Dork.mp4";
+    const char* filePath = "C:\\Users\\Mo.Elmalky\\Videos\\phone\\VID-20230617-WA0018.mp4";
 
 
     AVFormatContext* formatCtx = avformat_alloc_context();
@@ -90,8 +96,10 @@ int main() {
 
     int videoStreamIndex = -1;
     int audioStreamIndex = -1;
+    double time_base;
     for (unsigned int i = 0; i < formatCtx->nb_streams; i++) {
         if (formatCtx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            time_base = av_q2d(formatCtx->streams[i]->time_base);
             videoStreamIndex = i;
         } 
         else if (formatCtx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
@@ -138,7 +146,8 @@ int main() {
 
     int width = videoCodecParams->width;
     int height = videoCodecParams->height;
-    initializeGLFW(width/2, height/2);
+    std::cout << "video : Height " << height << ", Width " << width << std::endl;
+    initializeGLFW(width, height);
     GLFWwindow* window = glfwGetCurrentContext();
 
     AVFrame* frame = av_frame_alloc();
@@ -148,7 +157,7 @@ int main() {
 
     SwsContext* swsCtx = sws_getContext(
         width, height, videoCodecCtx->pix_fmt,
-        width/2, height/2, AV_PIX_FMT_RGB24,
+        width, height, AV_PIX_FMT_RGB24,
         SWS_BILINEAR, NULL, NULL, NULL
     );
 
@@ -188,7 +197,7 @@ int main() {
         paFloat32,                      
         48000,  
         512,                            
-        patestCallback,                 
+        audioplayCallback,
         &audioData);
 
     if (paErr != paNoError) {
@@ -209,10 +218,20 @@ int main() {
 
     
     int i = 0, j = 0;
+    double startTime,currentTime, frameTime, delay;
     while (av_read_frame(formatCtx, packet) >= 0) {
         if (packet->stream_index == videoStreamIndex) {
             if (avcodec_send_packet(videoCodecCtx, packet) == 0) {
                 while (avcodec_receive_frame(videoCodecCtx, frame) == 0) {
+                    if (i++ == 0) {
+                        startTime = get_system_time_seconds();
+                    }
+                    frameTime = frame->pts * time_base;
+                    currentTime = get_system_time_seconds();
+                    delay = frameTime - (currentTime - startTime);
+                    if (delay > 0)
+                        std::this_thread::sleep_for(std::chrono::duration<double>(delay));
+
                     sws_scale(swsCtx, frame->data, frame->linesize, 0, height, rgbFrame->data, rgbFrame->linesize);
                     renderFrame(window, rgbFrame, width, height);
 
@@ -221,30 +240,31 @@ int main() {
                 }
             }
         }
-        else if (packet->stream_index == audioStreamIndex) {
-            if (avcodec_send_packet(audioCodecCtx, packet) == 0) {
-                while (avcodec_receive_frame(audioCodecCtx, frame) == 0) {
-                    int outputSamples = (int)av_rescale_rnd(
-                        frame->nb_samples, 480000, audioCodecParams->sample_rate, AV_ROUND_UP);
+        //else if (packet->stream_index == audioStreamIndex) {
+        //    if (avcodec_send_packet(audioCodecCtx, packet) == 0) {
+        //        while (avcodec_receive_frame(audioCodecCtx, frame) == 0) {
+        //            int outputSamples = (int)av_rescale_rnd(
+        //                frame->nb_samples, 480000, audioCodecParams->sample_rate, AV_ROUND_UP);
 
-                    av_samples_alloc(&outputBuffer, &outputLinesize, 2, outputSamples,
-                        AV_SAMPLE_FMT_FLT, 0);
+        //            av_samples_alloc(&outputBuffer, &outputLinesize, 2, outputSamples,
+        //                AV_SAMPLE_FMT_FLT, 0);
 
-                    int converted_samples = swr_convert(
-                        swr_ctx,
-                        &outputBuffer,
-                        outputSamples,
-                        (const uint8_t**)frame->extended_data,
-                        frame->nb_samples);
+        //            int converted_samples = swr_convert(
+        //                swr_ctx,
+        //                &outputBuffer,
+        //                outputSamples,
+        //                (const uint8_t**)frame->extended_data,
+        //                frame->nb_samples);
+        //            //std::cout << "frame " << ++i << " time is " << frame->pts << std::endl;
 
-                    audioData.buffer = (float*)outputBuffer;
-                    audioData.remainingSamples = converted_samples * 2;
+        //            audioData.buffer = (float*)outputBuffer;
+        //            audioData.remainingSamples = converted_samples * 2;
 
-                    if (glfwWindowShouldClose(window))
-                        break;
-                }
-            }
-        }
+        //            if (glfwWindowShouldClose(window))
+        //                break;
+        //        }
+        //    }
+        //}
 
         av_packet_unref(packet);
         if (glfwWindowShouldClose(window))
